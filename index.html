@@ -8,6 +8,27 @@
     <meta name="theme-color" content="#000000">
     <title>Neon Bound</title>
     <style>
+        #audioControls {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 10px;
+            border: 1px solid #0ff;
+            display: flex;
+            gap: 10px;
+        }
+        #audioControls button {
+            padding: 8px 16px;
+            font-size: 14px;
+            min-height: auto;
+            min-width: auto;
+            margin: 0;
+        }
+    </style>
+    <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             background: #000;
@@ -117,6 +138,12 @@
         <div id="loading">Loading...</div>
     </div>
 
+    <div id="audioControls">
+        <button onclick="toggleMute()">🔊 Unmuted</button>
+    </div>
+
+    <!-- Web Audio API 将用于生成程序化音乐 -->
+
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
@@ -137,6 +164,22 @@
         let gravity = 1;
         let gravityTimer = 0;
         let flash = 0;
+        let audioContext = null;
+        let audioInitialized = false;
+        let isMuted = false;
+        let lastMoveTime = 0;
+        let lastGravityTime = 0;
+
+        // 音频节点
+        let mainGain = null;
+        let bassOsc = null;
+        let leadOsc = null;
+        let bassFilter = null;
+        let leadFilter = null;
+        let bassLFO = null;
+        let leadLFO = null;
+        let bassEnv = null;
+        let leadEnv = null;
 
         function resize() {
             const size = Math.min(window.innerWidth - 40, window.innerHeight - 40, 800);
@@ -157,12 +200,230 @@
             document.getElementById('loading').style.display = 'none';
             document.getElementById('highScore').textContent = highScore;
             requestAnimationFrame(gameLoop);
+
+            // Web Audio API 初始化
+            function initAudio() {
+                try {
+                    console.log('Initializing Web Audio API...');
+
+                    // 创建音频上下文
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    if (!AudioContext) {
+                        throw new Error('Web Audio API not supported');
+                    }
+
+                    audioContext = new AudioContext();
+                    console.log('AudioContext created:', audioContext.state);
+
+                    // 创建主音量控制
+                    mainGain = audioContext.createGain();
+                    mainGain.gain.value = 0.3;
+                    mainGain.connect(audioContext.destination);
+
+                    // 创建低音振荡器（贝斯）
+                    bassOsc = audioContext.createOscillator();
+                    bassOsc.type = 'sawtooth';
+                    bassOsc.frequency.value = 110; // A2
+
+                    bassFilter = audioContext.createBiquadFilter();
+                    bassFilter.type = 'lowpass';
+                    bassFilter.frequency.value = 400;
+
+                    bassLFO = audioContext.createOscillator();
+                    bassLFO.type = 'sine';
+                    bassLFO.frequency.value = 0.1;
+
+                    const bassLFOGain = audioContext.createGain();
+                    bassLFOGain.gain.value = 20;
+
+                    bassLFO.connect(bassLFOGain);
+                    bassLFOGain.connect(bassFilter.frequency);
+
+                    bassEnv = audioContext.createGain();
+                    bassEnv.gain.value = 0;
+
+                    bassOsc.connect(bassFilter);
+                    bassFilter.connect(bassEnv);
+                    bassEnv.connect(mainGain);
+
+                    // 创建主音振荡器（旋律）
+                    leadOsc = audioContext.createOscillator();
+                    leadOsc.type = 'square';
+                    leadOsc.frequency.value = 440; // A4
+
+                    leadFilter = audioContext.createBiquadFilter();
+                    leadFilter.type = 'bandpass';
+                    leadFilter.frequency.value = 800;
+                    leadFilter.Q.value = 2;
+
+                    leadLFO = audioContext.createOscillator();
+                    leadLFO.type = 'sine';
+                    leadLFO.frequency.value = 0.15;
+
+                    const leadLFOGain = audioContext.createGain();
+                    leadLFOGain.gain.value = 100;
+
+                    leadLFO.connect(leadLFOGain);
+                    leadLFOGain.connect(leadFilter.frequency);
+
+                    leadEnv = audioContext.createGain();
+                    leadEnv.gain.value = 0;
+
+                    leadOsc.connect(leadFilter);
+                    leadFilter.connect(leadEnv);
+                    leadEnv.connect(mainGain);
+
+                    // 启动振荡器
+                    bassOsc.start();
+                    leadOsc.start();
+                    bassLFO.start();
+                    leadLFO.start();
+
+                    // 设置音量包络
+                    const now = audioContext.currentTime;
+                    bassEnv.gain.setValueAtTime(0, now);
+                    bassEnv.gain.linearRampToValueAtTime(0.3, now + 0.5);
+
+                    leadEnv.gain.setValueAtTime(0, now);
+                    leadEnv.gain.linearRampToValueAtTime(0.2, now + 0.3);
+
+                    audioInitialized = true;
+                    console.log('Web Audio initialized successfully');
+
+                    // 开始音乐序列
+                    startMusicSequence();
+
+                } catch (error) {
+                    console.error('Error initializing Web Audio API:', error);
+                    console.error('Error details:', error.message, error.stack);
+                }
+            }
+
+            // 音乐序列
+            function startMusicSequence() {
+                if (!audioInitialized || isMuted) return;
+
+                const now = audioContext.currentTime;
+                const chordProgression = [110, 146.83, 174.61, 130.81]; // A, D, F, C
+                const melodyNotes = [440, 523.25, 392, 349.23, 440, 523.25, 392, 329.63];
+
+                // 每2秒改变和弦
+                setInterval(() => {
+                    if (!audioInitialized || isMuted) return;
+
+                    const randomChord = chordProgression[Math.floor(Math.random() * chordProgression.length)];
+                    const randomMelody = melodyNotes[Math.floor(Math.random() * melodyNotes.length)];
+
+                    const now = audioContext.currentTime;
+                    bassOsc.frequency.setValueAtTime(randomChord, now);
+                    leadOsc.frequency.setValueAtTime(randomMelody, now);
+
+                    // 添加滤波器扫频效果
+                    bassFilter.frequency.setValueAtTime(200, now);
+                    bassFilter.frequency.exponentialRampToValueAtTime(800, now + 0.5);
+
+                }, 2000);
+            }
+
+            // 用户第一次交互时启动音频
+            const startAudio = () => {
+                if (!audioInitialized && audioContext && audioContext.state === 'suspended') {
+                    audioContext.resume().then(() => {
+                        console.log('AudioContext resumed after user interaction');
+                        if (!audioInitialized) {
+                            initAudio();
+                        }
+                    }).catch(error => {
+                        console.error('Error resuming AudioContext:', error);
+                    });
+                } else if (!audioInitialized) {
+                    initAudio();
+                }
+
+                // 移除监听器
+                document.removeEventListener('click', startAudio);
+                document.removeEventListener('touchstart', startAudio);
+                canvas.removeEventListener('mousedown', startAudio);
+            };
+
+            // 添加交互监听
+            document.addEventListener('click', startAudio);
+            document.addEventListener('touchstart', startAudio);
+            canvas.addEventListener('mousedown', startAudio);
+
+            // 5秒后检查音频状态
+            setTimeout(() => {
+                if (!audioInitialized) {
+                    console.log('Audio not initialized after 5 seconds');
+                }
+            }, 5000);
+
+            // 设置备用音频源
+            function setupFallbackAudio() {
+                console.log('Setting up fallback audio...');
+                // 可以在这里添加备用音频URL
+            }
+
+            // 音频状态检查
+            function checkAudioStatus() {
+                const bgMusic = document.getElementById('bgMusic');
+                if (bgMusic) {
+                    console.log('Audio element readyState:', bgMusic.readyState);
+                    console.log('Audio element error:', bgMusic.error);
+                    console.log('Audio element src:', bgMusic.currentSrc);
+                }
+            }
+            // 5秒后检查音频状态
+            setTimeout(checkAudioStatus, 5000);
         }
 
-        window.addEventListener('load', initGame);
-        if (document.readyState === 'complete') {
+        // 页面加载后初始化
+        if (document.readyState === 'loading') {
+            window.addEventListener('DOMContentLoaded', initGame);
+        } else {
             initGame();
         }
+
+        function toggleMute() {
+            isMuted = !isMuted;
+            const btn = document.querySelector('#audioControls button');
+
+            if (mainGain) {
+                if (isMuted) {
+                    mainGain.gain.value = 0;
+                    btn.textContent = '🔇 Muted';
+                } else {
+                    mainGain.gain.value = 0.3;
+                    btn.textContent = '🔊 Unmuted';
+                }
+            } else {
+                btn.textContent = isMuted ? '🔇 Muted' : '🔊 Unmuted';
+            }
+
+            console.log('Audio muted:', isMuted);
+        }
+
+        // 游戏状态音频更新
+        function updateGameAudio(delta) {
+            if (!audioInitialized || isMuted) return;
+
+            // 根据游戏状态调整音频
+            const timeScale = bulletTimeActive ? 0.7 : 1.0 + (level * 0.05);
+            const targetGain = 0.2 + Math.min(0.1, level * 0.02);
+
+            if (mainGain) {
+                // 平滑过渡
+                mainGain.gain.setTargetAtTime(targetGain, audioContext.currentTime, 0.1);
+            }
+
+            // 调整LFO速度基于游戏速度
+            if (bassLFO && leadLFO) {
+                bassLFO.frequency.setTargetAtTime(0.1 * timeScale, audioContext.currentTime, 0.2);
+                leadLFO.frequency.setTargetAtTime(0.15 * timeScale, audioContext.currentTime, 0.2);
+            }
+        }
+
+        // 页面加载事件监听器已移到initGame函数后
 
         canvas.addEventListener('mousemove', e => {
             const rect = canvas.getBoundingClientRect();
@@ -183,6 +444,35 @@
         canvas.addEventListener('mousedown', () => {
             bulletTimeActive = true;
             canvas.style.boxShadow = '0 0 30px #f0f';
+            // 子弹时间音效 - 使用Web Audio API生成
+            if (!isMuted && audioContext) {
+                try {
+                    const bulletOsc = audioContext.createOscillator();
+                    const bulletGain = audioContext.createGain();
+                    const bulletFilter = audioContext.createBiquadFilter();
+
+                    bulletOsc.type = 'sawtooth';
+                    bulletOsc.frequency.setValueAtTime(200, audioContext.currentTime);
+                    bulletOsc.frequency.exponentialRampToValueAtTime(50, audioContext.currentTime + 0.5);
+
+                    bulletFilter.type = 'lowpass';
+                    bulletFilter.frequency.value = 1000;
+
+                    bulletGain.gain.setValueAtTime(0, audioContext.currentTime);
+                    bulletGain.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.05);
+                    bulletGain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 1.0);
+
+                    bulletOsc.connect(bulletFilter);
+                    bulletFilter.connect(bulletGain);
+                    bulletGain.connect(audioContext.destination);
+
+                    bulletOsc.start();
+                    bulletOsc.stop(audioContext.currentTime + 1.0);
+
+                } catch (error) {
+                    console.log('Bullet time sound generation failed:', error);
+                }
+            }
         });
         canvas.addEventListener('mouseup', () => {
             bulletTimeActive = false;
@@ -289,6 +579,32 @@
                 const smoothFactor = isMobile ? 0.5 : 0.4;
                 player.x += (dx / dist) * speed * delta * smoothFactor;
                 player.y += (dy / dist) * speed * delta * smoothFactor;
+
+                // 移动音效 - 使用Web Audio API生成
+                const now = Date.now();
+                if (now - lastMoveTime > 100 && !isMuted && audioContext) {  // 每100ms播放一次
+                    try {
+                        const moveOsc = audioContext.createOscillator();
+                        const moveGain = audioContext.createGain();
+
+                        moveOsc.type = 'sine';
+                        moveOsc.frequency.value = 300 + (speed * 50);
+
+                        moveGain.gain.setValueAtTime(0, audioContext.currentTime);
+                        moveGain.gain.linearRampToValueAtTime(Math.min(0.1, dist / 500), audioContext.currentTime + 0.01);
+                        moveGain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.1);
+
+                        moveOsc.connect(moveGain);
+                        moveGain.connect(audioContext.destination);
+
+                        moveOsc.start();
+                        moveOsc.stop(audioContext.currentTime + 0.1);
+
+                        lastMoveTime = now;
+                    } catch (error) {
+                        console.log('Move sound generation failed:', error);
+                    }
+                }
             }
 
             player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
@@ -306,9 +622,13 @@
         }
 
         function updateDifficulty() {
-            if (Math.floor(gameTime) % 10 === 0 && Math.floor(gameTime) > lastTime) {
+            // 每5秒增加1级（原来是10秒），但难度增加速度不变
+            if (Math.floor(gameTime) % 5 === 0 && Math.floor(gameTime) > lastTime) {
                 level++;
-                player.speed += 0.5;
+                // 每2级才增加一次速度，保持原来的难度增加速度
+                if (level % 2 === 0) {
+                    player.speed += 0.5;
+                }
                 shake = 10;
                 lastTime = Math.floor(gameTime);
             }
@@ -320,6 +640,38 @@
                 gravity = -gravity;
                 gravityTimer = 0;
                 flash = 30;
+                // 重力反转音效 - 使用Web Audio API生成
+                const now = Date.now();
+                if (now - lastGravityTime > 500 && !isMuted && audioContext) {  // 防止重复播放
+                    try {
+                        const gravityOsc1 = audioContext.createOscillator();
+                        const gravityOsc2 = audioContext.createOscillator();
+                        const gravityGain = audioContext.createGain();
+
+                        gravityOsc1.type = 'sine';
+                        gravityOsc1.frequency.value = gravity > 0 ? 400 : 300;
+
+                        gravityOsc2.type = 'triangle';
+                        gravityOsc2.frequency.value = gravity > 0 ? 600 : 450;
+
+                        gravityGain.gain.setValueAtTime(0, audioContext.currentTime);
+                        gravityGain.gain.linearRampToValueAtTime(0.2, audioContext.currentTime + 0.1);
+                        gravityGain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.5);
+
+                        gravityOsc1.connect(gravityGain);
+                        gravityOsc2.connect(gravityGain);
+                        gravityGain.connect(audioContext.destination);
+
+                        gravityOsc1.start();
+                        gravityOsc2.start();
+                        gravityOsc1.stop(audioContext.currentTime + 0.5);
+                        gravityOsc2.stop(audioContext.currentTime + 0.5);
+
+                        lastGravityTime = now;
+                    } catch (error) {
+                        console.log('Gravity sound generation failed:', error);
+                    }
+                }
             }
         }
 
@@ -410,6 +762,31 @@
             document.getElementById('finalHighScore').textContent = highScore;
             document.getElementById('finalTime').textContent = Math.floor(gameTime);
             document.getElementById('gameOver').style.display = 'block';
+
+            // 游戏结束音效
+            if (!isMuted && audioContext) {
+                try {
+                    const gameOverOsc = audioContext.createOscillator();
+                    const gameOverGain = audioContext.createGain();
+
+                    gameOverOsc.type = 'sawtooth';
+                    gameOverOsc.frequency.setValueAtTime(300, audioContext.currentTime);
+                    gameOverOsc.frequency.exponentialRampToValueAtTime(100, audioContext.currentTime + 0.5);
+
+                    gameOverGain.gain.setValueAtTime(0, audioContext.currentTime);
+                    gameOverGain.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.05);
+                    gameOverGain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.5);
+
+                    gameOverOsc.connect(gameOverGain);
+                    gameOverGain.connect(audioContext.destination);
+
+                    gameOverOsc.start();
+                    gameOverOsc.stop(audioContext.currentTime + 0.5);
+
+                } catch (error) {
+                    console.log('Game over sound generation failed:', error);
+                }
+            }
         }
 
         function resetGame() {
@@ -429,6 +806,31 @@
             flash = 0;
             document.getElementById('gameOver').style.display = 'none';
             updateUI();
+
+            // 重新开始音效
+            if (!isMuted && audioContext) {
+                try {
+                    const restartOsc = audioContext.createOscillator();
+                    const restartGain = audioContext.createGain();
+
+                    restartOsc.type = 'square';
+                    restartOsc.frequency.setValueAtTime(200, audioContext.currentTime);
+                    restartOsc.frequency.exponentialRampToValueAtTime(600, audioContext.currentTime + 0.2);
+
+                    restartGain.gain.setValueAtTime(0, audioContext.currentTime);
+                    restartGain.gain.linearRampToValueAtTime(0.2, audioContext.currentTime + 0.05);
+                    restartGain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.3);
+
+                    restartOsc.connect(restartGain);
+                    restartGain.connect(audioContext.destination);
+
+                    restartOsc.start();
+                    restartOsc.stop(audioContext.currentTime + 0.3);
+
+                } catch (error) {
+                    console.log('Restart sound generation failed:', error);
+                }
+            }
         }
 
         let lastSpawn = 0;
@@ -445,6 +847,9 @@
                 updateBulletTime(delta);
                 updateDifficulty();
                 updateGravity(delta);
+
+                // 更新游戏音频
+                updateGameAudio(delta);
 
                 lastSpawn += delta;
                 if (lastSpawn > 60 / (1 + level * 0.5)) {
