@@ -118,6 +118,13 @@
 </head>
 <body>
     <div id="gameContainer">
+        <div id="startScreen" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 999; display: flex; flex-direction: column; justify-content: center; align-items: center;">
+            <h1 style="color: #0ff; margin-bottom: 30px; text-shadow: 0 0 10px #0ff;">NEON BOUND</h1>
+            <button id="startBtn" style="padding: 20px 40px; font-size: 24px; background: transparent; border: 2px solid #0ff; color: #0ff; border-radius: 10px; box-shadow: 0 0 15px #0ff; cursor: pointer; text-transform: uppercase; animation: pulse 1.5s infinite;">Tap To Start</button>
+        </div>
+        <style>
+            @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
+        </style>
         <canvas id="gameCanvas"></canvas>
         <div id="ui">
             <div>Score: <span id="score">0</span></div>
@@ -258,7 +265,7 @@
             // ==========================================
             let isAudioUnlocked = false;
 
-            function unlockMobileAudio() {
+/*             function unlockMobileAudio() {
                 if (isAudioUnlocked) return;
 
                 // 1. 立即创建 AudioContext (必须在触摸事件的同步代码块内)
@@ -302,7 +309,7 @@
             // 在最高优先级（捕获阶段 true）拦截玩家的第一下触摸/点击
             ['touchstart', 'touchend', 'mousedown', 'keydown'].forEach(event => {
                 document.addEventListener(event, unlockMobileAudio, true);
-            });
+            }); */
 
             // 音乐序列 (悦耳的循环和弦与琶音)
             function startMusicSequence() {
@@ -440,11 +447,56 @@
         }
 
         // 页面加载后初始化
-        if (document.readyState === 'loading') {
-            window.addEventListener('DOMContentLoaded', initGame);
-        } else {
-            initGame();
+       // 页面加载后，只显示开始画面，不启动游戏
+        function setupStartScreen() {
+            resize();
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('highScore').textContent = highScore;
+            
+            const startBtn = document.getElementById('startBtn');
+            const startScreen = document.getElementById('startScreen');
+
+            // 只有当玩家明确点击了“Tap To Start”按钮时，才启动一切
+            startBtn.addEventListener('click', () => {
+                // 1. 隐藏开始界面
+                startScreen.style.display = 'none';
+
+                // 2. 强行初始化并解锁音频 (100% 有效，因为这是原生按钮点击)
+                try {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    audioContext = new AudioContext();
+                    
+                    if (audioContext.state === 'suspended') {
+                        audioContext.resume();
+                    }
+
+                    // 播放 1 毫秒极短无声振荡，彻底击穿 iOS 限制
+                    const unlockOsc = audioContext.createOscillator();
+                    const unlockGain = audioContext.createGain();
+                    unlockGain.gain.value = 0;
+                    unlockOsc.connect(unlockGain);
+                    unlockGain.connect(audioContext.destination);
+                    unlockOsc.start(audioContext.currentTime);
+                    unlockOsc.stop(audioContext.currentTime + 0.001);
+
+                    console.log("Audio Unlocked via Start Button!");
+                    initAudio(); // 调用我们之前写的悦耳音乐初始化
+                } catch (e) {
+                    console.error("Audio init failed:", e);
+                }
+
+                // 3. 启动游戏主循环
+                requestAnimationFrame(gameLoop);
+            });
         }
+
+        // 绑定启动逻辑
+        if (document.readyState === 'loading') {
+            window.addEventListener('DOMContentLoaded', setupStartScreen);
+        } else {
+            setupStartScreen();
+        }
+        
 
         function toggleMute() {
             isMuted = !isMuted;
