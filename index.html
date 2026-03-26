@@ -126,6 +126,7 @@
             <div>Level: <span id="level">1</span></div>
             <div>Bullet Time: <span id="bulletTime">100%</span></div>
             <div>Gravity: <span id="gravity">▼</span></div>
+            <div id="audioStatus" style="color:#888; font-size:12px;">Audio: Loading...</div>
         </div>
         <div id="gameOver">
             <h1>GAME OVER</h1>
@@ -164,22 +165,20 @@
         let gravity = 1;
         let gravityTimer = 0;
         let flash = 0;
+
+        // 音频节点
         let audioContext = null;
+        let mainGain = null;
+        let bassOsc = null;
+        let leadOsc = null;
         let audioInitialized = false;
         let isMuted = false;
         let lastMoveTime = 0;
         let lastGravityTime = 0;
 
-        // 音频节点
-        let mainGain = null;
-        let bassOsc = null;
-        let leadOsc = null;
-        let bassFilter = null;
-        let leadFilter = null;
-        let bassLFO = null;
-        let leadLFO = null;
-        let bassEnv = null;
-        let leadEnv = null;
+        let lastAudioLevel = 1;
+        let lastBulletTimeState = false;
+        let isAudioUnlocked = false; // 专门记录手机端是否解锁了音频
 
         function resize() {
             const size = Math.min(window.innerWidth - 40, window.innerHeight - 40, 800);
@@ -201,43 +200,23 @@
             document.getElementById('highScore').textContent = highScore;
             requestAnimationFrame(gameLoop);
 
-            // Web Audio API 初始化
+            // Web Audio API 初始化（简化版，移动设备兼容）
+           // Web Audio API 初始化 (空灵合成器版本)
             function initAudio() {
                 try {
-                    console.log('Initializing Web Audio API...');
-
-                    // 创建音频上下文
                     const AudioContext = window.AudioContext || window.webkitAudioContext;
-                    if (!AudioContext) {
-                        throw new Error('Web Audio API not supported');
-                    }
-
                     audioContext = new AudioContext();
-                    console.log('AudioContext created:', audioContext.state);
 
-                    // 创建主音量控制
                     mainGain = audioContext.createGain();
-                    mainGain.gain.value = 0.3;
+                    mainGain.gain.value = 0.3; // 整体音量
                     mainGain.connect(audioContext.destination);
 
-                    // 创建低音振荡器（贝斯）
+                    // 1. 背景低音 (使用柔和的三角波)
                     bassOsc = audioContext.createOscillator();
-                    bassOsc.type = 'sawtooth';
-                    bassOsc.frequency.value = 110; // A2
-
+                    bassOsc.type = 'triangle';
                     bassFilter = audioContext.createBiquadFilter();
                     bassFilter.type = 'lowpass';
-                    bassFilter.frequency.value = 400;
-
-                    bassLFO = audioContext.createOscillator();
-                    bassLFO.type = 'sine';
-                    bassLFO.frequency.value = 0.1;
-
-                    const bassLFOGain = audioContext.createGain();
-                    bassLFOGain.gain.value = 20;
-
-                    bassLFO.connect(bassLFOGain);
-                    bassLFOGain.connect(bassFilter.frequency);
+                    bassFilter.frequency.value = 600;
 
                     bassEnv = audioContext.createGain();
                     bassEnv.gain.value = 0;
@@ -246,25 +225,12 @@
                     bassFilter.connect(bassEnv);
                     bassEnv.connect(mainGain);
 
-                    // 创建主音振荡器（旋律）
+                    // 2. 旋律主音 (使用纯净的正弦波)
                     leadOsc = audioContext.createOscillator();
-                    leadOsc.type = 'square';
-                    leadOsc.frequency.value = 440; // A4
-
+                    leadOsc.type = 'sine';
                     leadFilter = audioContext.createBiquadFilter();
-                    leadFilter.type = 'bandpass';
-                    leadFilter.frequency.value = 800;
-                    leadFilter.Q.value = 2;
-
-                    leadLFO = audioContext.createOscillator();
-                    leadLFO.type = 'sine';
-                    leadLFO.frequency.value = 0.15;
-
-                    const leadLFOGain = audioContext.createGain();
-                    leadLFOGain.gain.value = 100;
-
-                    leadLFO.connect(leadLFOGain);
-                    leadLFOGain.connect(leadFilter.frequency);
+                    leadFilter.type = 'lowpass';
+                    leadFilter.frequency.value = 1500;
 
                     leadEnv = audioContext.createGain();
                     leadEnv.gain.value = 0;
@@ -273,108 +239,170 @@
                     leadFilter.connect(leadEnv);
                     leadEnv.connect(mainGain);
 
-                    // 启动振荡器
                     bassOsc.start();
                     leadOsc.start();
-                    bassLFO.start();
-                    leadLFO.start();
-
-                    // 设置音量包络
-                    const now = audioContext.currentTime;
-                    bassEnv.gain.setValueAtTime(0, now);
-                    bassEnv.gain.linearRampToValueAtTime(0.3, now + 0.5);
-
-                    leadEnv.gain.setValueAtTime(0, now);
-                    leadEnv.gain.linearRampToValueAtTime(0.2, now + 0.3);
 
                     audioInitialized = true;
-                    console.log('Web Audio initialized successfully');
-
-                    // 开始音乐序列
                     startMusicSequence();
-
                 } catch (error) {
-                    console.error('Error initializing Web Audio API:', error);
-                    console.error('Error details:', error.message, error.stack);
+                    console.log('Audio init error:', error);
                 }
             }
 
-            // 音乐序列
+            // 音乐序列 (悦耳的循环和弦与琶音)
             function startMusicSequence() {
                 if (!audioInitialized || isMuted) return;
 
-                const now = audioContext.currentTime;
-                const chordProgression = [110, 146.83, 174.61, 130.81]; // A, D, F, C
-                const melodyNotes = [440, 523.25, 392, 349.23, 440, 523.25, 392, 329.63];
+                // 经典的优美和弦走向：Am -> F -> G -> Em
+                const chords = [
+                    [220.00, 261.63, 329.63], // A minor
+                    [174.61, 220.00, 261.63], // F major
+                    [196.00, 246.94, 293.66], // G major
+                    [164.81, 196.00, 246.94]  // E minor
+                ];
+                
+                let step = 0;
+                let chordIndex = 0;
 
-                // 每2秒改变和弦
                 setInterval(() => {
-                    if (!audioInitialized || isMuted) return;
-
-                    const randomChord = chordProgression[Math.floor(Math.random() * chordProgression.length)];
-                    const randomMelody = melodyNotes[Math.floor(Math.random() * melodyNotes.length)];
+                    if (!audioInitialized || isMuted || !audioContext) return;
+                    if (audioContext.state === 'suspended') return;
 
                     const now = audioContext.currentTime;
-                    bassOsc.frequency.setValueAtTime(randomChord, now);
-                    leadOsc.frequency.setValueAtTime(randomMelody, now);
+                    // 子弹时间开启时，节奏减慢
+                    const speedMultiplier = bulletTimeActive ? 2 : 1; 
 
-                    // 添加滤波器扫频效果
-                    bassFilter.frequency.setValueAtTime(200, now);
-                    bassFilter.frequency.exponentialRampToValueAtTime(800, now + 0.5);
+                    // 每隔一段时间切换和弦，并播放低音
+                    if (step % (4 * speedMultiplier) === 0) {
+                        chordIndex = (chordIndex + 1) % chords.length;
+                        bassOsc.frequency.setValueAtTime(chords[chordIndex][0] / 2, now);
+                        bassEnv.gain.setTargetAtTime(0.4, now, 0.1);
+                    }
 
-                }, 2000);
+                    // 播放旋律（琶音弹拨感）
+                    const note = chords[chordIndex][step % 3];
+                    // 子弹时间开启时，旋律降一个八度
+                    const finalNote = bulletTimeActive ? note / 2 : note; 
+                    
+                    leadOsc.frequency.setValueAtTime(finalNote, now);
+                    
+                    // 制造“叮”的弹拨包络音效
+                    leadEnv.gain.setValueAtTime(0, now);
+                    leadEnv.gain.linearRampToValueAtTime(0.3, now + 0.05);
+                    leadEnv.gain.exponentialRampToValueAtTime(0.001, now + (bulletTimeActive ? 0.6 : 0.3));
+
+                    step++;
+                }, 250); // 基础节奏：每秒4个音符
             }
 
-            // 用户第一次交互时启动音频
-            const startAudio = () => {
-                if (!audioInitialized && audioContext && audioContext.state === 'suspended') {
-                    audioContext.resume().then(() => {
-                        console.log('AudioContext resumed after user interaction');
-                        if (!audioInitialized) {
-                            initAudio();
-                        }
-                    }).catch(error => {
-                        console.error('Error resuming AudioContext:', error);
-                    });
-                } else if (!audioInitialized) {
+            // 用户第一次交互时启动音频（移动设备兼容）
+            // 用户第一次交互时启动音频 (移动端专项修复)
+            const startAudio = (e) => {
+                // 如果还没初始化，先初始化
+                if (!audioInitialized) {
                     initAudio();
                 }
+                
+                // 核心修复：强制唤醒 iOS 的 AudioContext
+                if (audioContext && audioContext.state === 'suspended') {
+                    audioContext.resume().then(() => {
+                        console.log('AudioContext forced to resume (iOS Fix)');
+                    });
+                }
+                
+                isAudioUnlocked = true;
 
-                // 移除监听器
+                // 移除监听器，确保只执行一次
                 document.removeEventListener('click', startAudio);
-                document.removeEventListener('touchstart', startAudio);
+                document.removeEventListener('touchstart', startAudio, { capture: true });
                 canvas.removeEventListener('mousedown', startAudio);
             };
 
-            // 添加交互监听
+            // 添加交互监听 (使用 capture: true 确保在 e.preventDefault 拦截前最先触发)
             document.addEventListener('click', startAudio);
-            document.addEventListener('touchstart', startAudio);
+            document.addEventListener('touchstart', startAudio, { capture: true, passive: true });
             canvas.addEventListener('mousedown', startAudio);
+
+            // 移动设备音频修复
+            function fixMobileAudio() {
+                const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+                const isAndroid = /Android/.test(navigator.userAgent);
+
+                if ((isIOS || isAndroid) && audioContext && audioContext.state === 'suspended') {
+                    console.log('Mobile device detected with suspended AudioContext');
+                    console.log('Attempting to resume AudioContext...');
+
+                    // 尝试多种方式恢复音频
+                    const resumeAudio = () => {
+                        audioContext.resume().then(() => {
+                            console.log('AudioContext resumed on mobile');
+                            if (!audioInitialized) {
+                                initAudio();
+                            }
+                        }).catch(error => {
+                            console.error('Failed to resume AudioContext on mobile:', error);
+                        });
+                    };
+
+                    // 立即尝试一次
+                    resumeAudio();
+
+                    // 3秒后再试一次
+                    setTimeout(resumeAudio, 3000);
+                }
+            }
 
             // 5秒后检查音频状态
             setTimeout(() => {
                 if (!audioInitialized) {
                     console.log('Audio not initialized after 5 seconds');
+                    console.log('AudioContext state:', audioContext ? audioContext.state : 'null');
+                    console.log('User agent:', navigator.userAgent);
+                    console.log('Is iOS:', /iPhone|iPad|iPod/.test(navigator.userAgent));
+                    console.log('Is Android:', /Android/.test(navigator.userAgent));
+
+                    // 尝试移动设备修复
+                    fixMobileAudio();
                 }
             }, 5000);
 
-            // 设置备用音频源
-            function setupFallbackAudio() {
-                console.log('Setting up fallback audio...');
-                // 可以在这里添加备用音频URL
-            }
+            // 添加音频测试按钮
+            function testAudio() {
+                console.log('=== Audio Test ===');
+                console.log('AudioContext:', audioContext);
+                console.log('AudioContext state:', audioContext ? audioContext.state : 'null');
+                console.log('Audio initialized:', audioInitialized);
+                console.log('Is muted:', isMuted);
+                console.log('Main gain:', mainGain);
 
-            // 音频状态检查
-            function checkAudioStatus() {
-                const bgMusic = document.getElementById('bgMusic');
-                if (bgMusic) {
-                    console.log('Audio element readyState:', bgMusic.readyState);
-                    console.log('Audio element error:', bgMusic.error);
-                    console.log('Audio element src:', bgMusic.currentSrc);
+                if (audioContext) {
+                    // 播放测试音
+                    try {
+                        const testOsc = audioContext.createOscillator();
+                        const testGain = audioContext.createGain();
+
+                        testOsc.type = 'sine';
+                        testOsc.frequency.value = 440;
+
+                        testGain.gain.setValueAtTime(0, audioContext.currentTime);
+                        testGain.gain.linearRampToValueAtTime(0.1, audioContext.currentTime + 0.1);
+                        testGain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.5);
+
+                        testOsc.connect(testGain);
+                        testGain.connect(audioContext.destination);
+
+                        testOsc.start();
+                        testOsc.stop(audioContext.currentTime + 0.5);
+
+                        console.log('Test sound played successfully');
+                    } catch (error) {
+                        console.error('Test sound failed:', error);
+                    }
                 }
             }
-            // 5秒后检查音频状态
-            setTimeout(checkAudioStatus, 5000);
+
+            // 10秒后自动测试
+            setTimeout(testAudio, 10000);
         }
 
         // 页面加载后初始化
@@ -401,25 +429,37 @@
             }
 
             console.log('Audio muted:', isMuted);
+            updateUI(); // 更新UI状态
         }
 
         // 游戏状态音频更新
+       // 游戏状态音频更新 (终极安全修复版)
+        // 游戏状态音频更新 (带子弹时间沉闷特效)
         function updateGameAudio(delta) {
-            if (!audioInitialized || isMuted) return;
-
-            // 根据游戏状态调整音频
-            const timeScale = bulletTimeActive ? 0.7 : 1.0 + (level * 0.05);
-            const targetGain = 0.2 + Math.min(0.1, level * 0.02);
-
-            if (mainGain) {
-                // 平滑过渡
-                mainGain.gain.setTargetAtTime(targetGain, audioContext.currentTime, 0.1);
+            if (!audioInitialized || isMuted || !audioContext) return;
+            
+            if (typeof updateGameAudio.lastBullet === 'undefined') {
+                updateGameAudio.lastBullet = false;
+                updateGameAudio.lastLevel = 1;
             }
 
-            // 调整LFO速度基于游戏速度
-            if (bassLFO && leadLFO) {
-                bassLFO.frequency.setTargetAtTime(0.1 * timeScale, audioContext.currentTime, 0.2);
-                leadLFO.frequency.setTargetAtTime(0.15 * timeScale, audioContext.currentTime, 0.2);
+            // 当子弹时间状态发生改变时触发
+            if (bulletTimeActive !== updateGameAudio.lastBullet || level !== updateGameAudio.lastLevel) {
+                try {
+                    if (leadFilter && bassFilter) {
+                        // 核心特效：开启子弹时间时，高音被切断，声音变得“沉闷”（类似于潜入水下的感觉）
+                        const leadFreq = bulletTimeActive ? 400 : 1500;
+                        const bassFreq = bulletTimeActive ? 200 : 600;
+                        
+                        leadFilter.frequency.setTargetAtTime(leadFreq, audioContext.currentTime, 0.2);
+                        bassFilter.frequency.setTargetAtTime(bassFreq, audioContext.currentTime, 0.2);
+                    }
+                } catch (e) {
+                    console.log("Audio update ignored", e);
+                }
+
+                updateGameAudio.lastBullet = bulletTimeActive;
+                updateGameAudio.lastLevel = level;
             }
         }
 
@@ -750,6 +790,24 @@
             document.getElementById('level').textContent = level;
             document.getElementById('bulletTime').textContent = Math.floor(bulletTime) + '%';
             document.getElementById('gravity').textContent = gravity > 0 ? '▼' : '▲';
+
+            // 更新音频状态
+            const audioStatus = document.getElementById('audioStatus');
+            if (audioStatus) {
+                if (isMuted) {
+                    audioStatus.textContent = 'Audio: Muted';
+                    audioStatus.style.color = '#f00';
+                } else if (audioInitialized) {
+                    audioStatus.textContent = 'Audio: Active';
+                    audioStatus.style.color = '#0f0';
+                } else if (audioContext && audioContext.state === 'suspended') {
+                    audioStatus.textContent = 'Audio: Tap to enable';
+                    audioStatus.style.color = '#ff0';
+                } else {
+                    audioStatus.textContent = 'Audio: Ready';
+                    audioStatus.style.color = '#888';
+                }
+            }
         }
 
         function gameOver() {
