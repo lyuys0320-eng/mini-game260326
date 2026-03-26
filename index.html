@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#000000">
+    <title>Neon Bound</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+            font-family: monospace;
+            color: #0ff;
+            text-shadow: 0 0 5px #0ff;
+        }
+        #gameContainer {
+            position: relative;
+            border: 2px solid #0ff;
+            box-shadow: 0 0 20px #0ff;
+        }
+        canvas {
+            display: block;
+            background: #000;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: min(16px, 3vw);
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 5px 10px;
+            border-radius: 5px;
+            border: 1px solid #0ff;
+        }
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            display: none;
+            z-index: 20;
+        }
+        h1 { color: #f0f; margin-bottom: 20px; font-size: min(36px, 8vw); text-shadow: 0 0 10px #f0f; }
+        button {
+            background: #000;
+            color: #0ff;
+            border: 2px solid #0ff;
+            padding: min(20px, 5vw) min(40px, 10vw);
+            font-size: min(22px, 5vw);
+            cursor: pointer;
+            margin-top: 20px;
+            font-family: monospace;
+            text-shadow: 0 0 5px #0ff;
+            box-shadow: 0 0 10px #0ff;
+            min-height: 60px;
+            min-width: 140px;
+            touch-action: manipulation;
+            border-radius: 10px;
+        }
+        button:hover, button:active { background: #0ff; color: #000; }
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            font-size: min(12px, 2.5vw);
+            color: #888;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 30;
+            color: #0ff;
+            font-size: min(24px, 6vw);
+        }
+        #gameContainer {
+            -webkit-tap-highlight-color: transparent;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui">
+            <div>Score: <span id="score">0</span></div>
+            <div>High Score: <span id="highScore">0</span></div>
+            <div>Time: <span id="time">0</span>s</div>
+            <div>Level: <span id="level">1</span></div>
+            <div>Bullet Time: <span id="bulletTime">100%</span></div>
+            <div>Gravity: <span id="gravity">▼</span></div>
+        </div>
+        <div id="gameOver">
+            <h1>GAME OVER</h1>
+            <div>Final Score: <span id="finalScore">0</span></div>
+            <div>High Score: <span id="finalHighScore">0</span></div>
+            <div>Time Survived: <span id="finalTime">0</span>s</div>
+            <button onclick="resetGame()">PLAY AGAIN</button>
+        </div>
+        <div id="instructions">Move: Mouse/Touch | Bullet Time: Hold Click/Touch</div>
+        <div id="loading">Loading...</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('gameContainer');
+
+        let player = { x: 400, y: 300, radius: 10, speed: 5 };
+        let target = { x: 400, y: 300 };
+        let shapes = [];
+        let score = 0;
+        let highScore = localStorage.getItem('neonBoundHighScore') || 0;
+        let gameTime = 0;
+        let level = 1;
+        let bulletTime = 100;
+        let bulletTimeActive = false;
+        let gameRunning = true;
+        let shake = 0;
+        let lastTime = 0;
+        let gravity = 1;
+        let gravityTimer = 0;
+        let flash = 0;
+
+        function resize() {
+            const size = Math.min(window.innerWidth - 40, window.innerHeight - 40, 800);
+            canvas.width = size;
+            canvas.height = size;
+            container.style.width = size + 'px';
+            container.style.height = size + 'px';
+            player.x = canvas.width / 2;
+            player.y = canvas.height / 2;
+            target.x = player.x;
+            target.y = player.y;
+        }
+
+        window.addEventListener('resize', resize);
+
+        function initGame() {
+            resize();
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('highScore').textContent = highScore;
+            requestAnimationFrame(gameLoop);
+        }
+
+        window.addEventListener('load', initGame);
+        if (document.readyState === 'complete') {
+            initGame();
+        }
+
+        canvas.addEventListener('mousemove', e => {
+            const rect = canvas.getBoundingClientRect();
+            target.x = e.clientX - rect.left;
+            target.y = e.clientY - rect.top;
+        });
+
+        canvas.addEventListener('touchmove', e => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            target.x = e.touches[0].clientX - rect.left;
+            target.y = e.touches[0].clientY - rect.top;
+            // Visual feedback for touch
+            canvas.style.filter = 'brightness(1.2)';
+            setTimeout(() => canvas.style.filter = '', 100);
+        }, { passive: false });
+
+        canvas.addEventListener('mousedown', () => {
+            bulletTimeActive = true;
+            canvas.style.boxShadow = '0 0 30px #f0f';
+        });
+        canvas.addEventListener('mouseup', () => {
+            bulletTimeActive = false;
+            canvas.style.boxShadow = '';
+        });
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            bulletTimeActive = true;
+            const rect = canvas.getBoundingClientRect();
+            target.x = e.touches[0].clientX - rect.left;
+            target.y = e.touches[0].clientY - rect.top;
+            // Visual feedback for bullet time activation
+            canvas.style.boxShadow = '0 0 30px #f0f';
+        }, { passive: false });
+        canvas.addEventListener('touchend', () => {
+            bulletTimeActive = false;
+            canvas.style.boxShadow = '';
+        });
+
+        function createShape() {
+            const types = ['circle', 'square', 'triangle'];
+            const type = types[Math.floor(Math.random() * types.length)];
+            const size = 20 + Math.random() * 30;
+            const speed = 1 + level * 0.5 + Math.random() * 2;
+
+            let x, y;
+            if (Math.random() < 0.5) {
+                x = Math.random() < 0.5 ? -size : canvas.width + size;
+                y = Math.random() * canvas.height;
+            } else {
+                x = Math.random() * canvas.width;
+                y = Math.random() < 0.5 ? -size : canvas.height + size;
+            }
+
+            const angle = Math.atan2(player.y - y, player.x - x);
+
+            shapes.push({
+                type, x, y, size, speed,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                color: `hsl(${Math.random() * 360}, 100%, 60%)`
+            });
+        }
+
+        function updateShapes(delta) {
+            for (let i = shapes.length - 1; i >= 0; i--) {
+                const s = shapes[i];
+                s.x += s.vx * delta;
+                s.y += (s.vy + gravity * 0.5) * delta;
+
+                if (s.x < -s.size * 2 || s.x > canvas.width + s.size * 2 ||
+                    s.y < -s.size * 2 || s.y > canvas.height + s.size * 2) {
+                    shapes.splice(i, 1);
+                    score += 10;
+                }
+
+                const dx = s.x - player.x;
+                const dy = s.y - player.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                let collision = false;
+                if (s.type === 'circle') {
+                    collision = distance < s.size + player.radius;
+                } else if (s.type === 'square') {
+                    collision = Math.abs(dx) < s.size + player.radius &&
+                               Math.abs(dy) < s.size + player.radius;
+                } else if (s.type === 'triangle') {
+                    const points = [
+                        {x: s.x, y: s.y - s.size},
+                        {x: s.x - s.size, y: s.y + s.size},
+                        {x: s.x + s.size, y: s.y + s.size}
+                    ];
+                    collision = pointInTriangle(player.x, player.y, points);
+                }
+
+                if (collision) {
+                    gameOver();
+                    return;
+                }
+            }
+        }
+
+        function pointInTriangle(px, py, tri) {
+            const [p1, p2, p3] = tri;
+            const area = 0.5 * (-p2.y * p3.x + p1.y * (-p2.x + p3.x) + p1.x * (p2.y - p3.y) + p2.x * p3.y);
+            const s = 1 / (2 * area) * (p1.y * p3.x - p1.x * p3.y + (p3.y - p1.y) * px + (p1.x - p3.x) * py);
+            const t = 1 / (2 * area) * (p1.x * p2.y - p1.y * p2.x + (p1.y - p2.y) * px + (p2.x - p1.x) * py);
+            return s > 0 && t > 0 && (1 - s - t) > 0;
+        }
+
+        function updatePlayer(delta) {
+            const dx = target.x - player.x;
+            const dy = target.y - player.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist > 1) {  // 恢复较小的距离阈值
+                // 检测设备类型，为移动设备降低灵敏度
+                const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                const baseSpeed = isMobile ? 4 : 6;  // 移动设备稍慢，电脑正常
+                const speed = bulletTimeActive ? baseSpeed * 0.3 : baseSpeed;
+                // 为移动设备添加更多平滑
+                const smoothFactor = isMobile ? 0.15 : 0.3;
+                player.x += (dx / dist) * speed * delta * smoothFactor;
+                player.y += (dy / dist) * speed * delta * smoothFactor;
+            }
+
+            player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
+            player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
+        }
+
+        function updateBulletTime(delta) {
+            if (bulletTimeActive && bulletTime > 0) {
+                bulletTime -= delta * 20;
+                if (bulletTime < 0) bulletTime = 0;
+            } else if (!bulletTimeActive && bulletTime < 100) {
+                bulletTime += delta * 10;
+                if (bulletTime > 100) bulletTime = 100;
+            }
+        }
+
+        function updateDifficulty() {
+            if (Math.floor(gameTime) % 10 === 0 && Math.floor(gameTime) > lastTime) {
+                level++;
+                player.speed += 0.5;
+                shake = 10;
+                lastTime = Math.floor(gameTime);
+            }
+        }
+
+        function updateGravity(delta) {
+            gravityTimer += delta / 60;
+            if (gravityTimer >= 15) {
+                gravity = -gravity;
+                gravityTimer = 0;
+                flash = 30;
+            }
+        }
+
+        function draw() {
+            ctx.save();
+
+            if (shake > 0) {
+                ctx.translate(Math.random() * shake - shake/2, Math.random() * shake - shake/2);
+                shake *= 0.9;
+            }
+
+            if (flash > 0) {
+                ctx.fillStyle = gravity > 0 ? 'rgba(0, 255, 255, 0.3)' : 'rgba(255, 0, 255, 0.3)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                flash--;
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.strokeStyle = '#0ff';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(0, 0, canvas.width, canvas.height);
+
+            shapes.forEach(s => {
+                ctx.fillStyle = s.color;
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+
+                if (s.type === 'circle') {
+                    ctx.beginPath();
+                    ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                } else if (s.type === 'square') {
+                    ctx.fillRect(s.x - s.size, s.y - s.size, s.size * 2, s.size * 2);
+                    ctx.strokeRect(s.x - s.size, s.y - s.size, s.size * 2, s.size * 2);
+                } else if (s.type === 'triangle') {
+                    ctx.beginPath();
+                    ctx.moveTo(s.x, s.y - s.size);
+                    ctx.lineTo(s.x - s.size, s.y + s.size);
+                    ctx.lineTo(s.x + s.size, s.y + s.size);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+                }
+            });
+
+            const gradient = ctx.createRadialGradient(player.x, player.y, 0, player.x, player.y, player.radius);
+            gradient.addColorStop(0, '#fff');
+            gradient.addColorStop(1, bulletTimeActive ? '#f0f' : '#0ff');
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            if (bulletTimeActive) {
+                ctx.strokeStyle = 'rgba(255, 0, 255, 0.5)';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, player.radius + 5, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            ctx.restore();
+        }
+
+        function updateUI() {
+            document.getElementById('score').textContent = score;
+            document.getElementById('highScore').textContent = highScore;
+            document.getElementById('time').textContent = Math.floor(gameTime);
+            document.getElementById('level').textContent = level;
+            document.getElementById('bulletTime').textContent = Math.floor(bulletTime) + '%';
+            document.getElementById('gravity').textContent = gravity > 0 ? '▼' : '▲';
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('neonBoundHighScore', highScore);
+            }
+            document.getElementById('finalScore').textContent = score;
+            document.getElementById('finalHighScore').textContent = highScore;
+            document.getElementById('finalTime').textContent = Math.floor(gameTime);
+            document.getElementById('gameOver').style.display = 'block';
+        }
+
+        function resetGame() {
+            player = { x: canvas.width / 2, y: canvas.height / 2, radius: 10, speed: 5 };
+            target = { x: player.x, y: player.y };
+            shapes = [];
+            score = 0;
+            gameTime = 0;
+            level = 1;
+            bulletTime = 100;
+            bulletTimeActive = false;
+            gameRunning = true;
+            shake = 0;
+            lastTime = 0;
+            gravity = 1;
+            gravityTimer = 0;
+            flash = 0;
+            document.getElementById('gameOver').style.display = 'none';
+            updateUI();
+        }
+
+        let lastSpawn = 0;
+        function gameLoop(timestamp) {
+            if (!lastTime) lastTime = timestamp;
+            const delta = Math.min((timestamp - lastTime) / 16, 2);
+            lastTime = timestamp;
+
+            if (gameRunning) {
+                gameTime += delta / 60;
+
+                updatePlayer(delta);
+                updateShapes(delta);
+                updateBulletTime(delta);
+                updateDifficulty();
+                updateGravity(delta);
+
+                lastSpawn += delta;
+                if (lastSpawn > 60 / (1 + level * 0.5)) {
+                    createShape();
+                    lastSpawn = 0;
+                }
+
+                draw();
+                updateUI();
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+    </script>
+</body>
+</html>
