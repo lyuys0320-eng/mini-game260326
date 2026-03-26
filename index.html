@@ -202,16 +202,20 @@
 
             // Web Audio API 初始化（简化版，移动设备兼容）
            // Web Audio API 初始化 (空灵合成器版本)
+            // Web Audio API 初始化
             function initAudio() {
                 try {
-                    const AudioContext = window.AudioContext || window.webkitAudioContext;
-                    audioContext = new AudioContext();
+                    // 【核心修改1】如果上下文已经存在（被解锁器创建了），就不要重新 new，避免覆盖
+                    if (!audioContext) {
+                        const AudioContext = window.AudioContext || window.webkitAudioContext;
+                        audioContext = new AudioContext();
+                    }
 
                     mainGain = audioContext.createGain();
-                    mainGain.gain.value = 0.3; // 整体音量
+                    mainGain.gain.value = 0.3; 
                     mainGain.connect(audioContext.destination);
 
-                    // 1. 背景低音 (使用柔和的三角波)
+                    // 1. 背景低音 (三角波)
                     bassOsc = audioContext.createOscillator();
                     bassOsc.type = 'triangle';
                     bassFilter = audioContext.createBiquadFilter();
@@ -225,7 +229,7 @@
                     bassFilter.connect(bassEnv);
                     bassEnv.connect(mainGain);
 
-                    // 2. 旋律主音 (使用纯净的正弦波)
+                    // 2. 旋律主音 (正弦波)
                     leadOsc = audioContext.createOscillator();
                     leadOsc.type = 'sine';
                     leadFilter = audioContext.createBiquadFilter();
@@ -248,6 +252,57 @@
                     console.log('Audio init error:', error);
                 }
             }
+
+            // ==========================================
+            // 终极移动端音频解锁方案 (Audio Unlocker Hack)
+            // ==========================================
+            let isAudioUnlocked = false;
+
+            function unlockMobileAudio() {
+                if (isAudioUnlocked) return;
+
+                // 1. 立即创建 AudioContext (必须在触摸事件的同步代码块内)
+                if (!audioContext) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    audioContext = new AudioContext();
+                }
+
+                // 2. 强制唤醒
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+
+                // 3. 【核心大招】播放一段 1 毫秒的无声振荡器，强行打破 iOS/Android 的静音锁定！
+                try {
+                    const unlockOsc = audioContext.createOscillator();
+                    const unlockGain = audioContext.createGain();
+                    unlockGain.gain.value = 0; // 设为完全静音
+                    unlockOsc.connect(unlockGain);
+                    unlockGain.connect(audioContext.destination);
+                    unlockOsc.start(audioContext.currentTime);
+                    unlockOsc.stop(audioContext.currentTime + 0.001); // 播放1毫秒就停
+                } catch (e) {
+                    console.log("Unlock buffer failed", e);
+                }
+
+                isAudioUnlocked = true;
+                console.log("手机端音频锁已强行解除！");
+
+                // 解锁成功后，正常初始化你的游戏音乐
+                if (!audioInitialized) {
+                    initAudio();
+                }
+
+                // 功成身退，移除所有监听器，避免消耗性能
+                ['touchstart', 'touchend', 'mousedown', 'keydown'].forEach(event => {
+                    document.removeEventListener(event, unlockMobileAudio, true);
+                });
+            }
+
+            // 在最高优先级（捕获阶段 true）拦截玩家的第一下触摸/点击
+            ['touchstart', 'touchend', 'mousedown', 'keydown'].forEach(event => {
+                document.addEventListener(event, unlockMobileAudio, true);
+            });
 
             // 音乐序列 (悦耳的循环和弦与琶音)
             function startMusicSequence() {
@@ -295,28 +350,7 @@
                 }, 250); // 基础节奏：每秒4个音符
             }
 
-            // 用户第一次交互时启动音频（移动设备兼容）
-            // 用户第一次交互时启动音频 (移动端专项修复)
-            const startAudio = (e) => {
-                // 如果还没初始化，先初始化
-                if (!audioInitialized) {
-                    initAudio();
-                }
-                
-                // 核心修复：强制唤醒 iOS 的 AudioContext
-                if (audioContext && audioContext.state === 'suspended') {
-                    audioContext.resume().then(() => {
-                        console.log('AudioContext forced to resume (iOS Fix)');
-                    });
-                }
-                
-                isAudioUnlocked = true;
-
-                // 移除监听器，确保只执行一次
-                document.removeEventListener('click', startAudio);
-                document.removeEventListener('touchstart', startAudio, { capture: true });
-                canvas.removeEventListener('mousedown', startAudio);
-            };
+           
 
             // 添加交互监听 (使用 capture: true 确保在 e.preventDefault 拦截前最先触发)
             document.addEventListener('click', startAudio);
